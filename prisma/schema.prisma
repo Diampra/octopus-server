@@ -1,0 +1,95 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl      = env("DIRECT_URL")
+}
+model BlogCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  posts     BlogPost[]
+}
+model BlogPost {
+  id        String   @id @default(uuid())
+  title     String
+  slug      String   @unique
+  excerpt   String
+  content   String
+  imageUrl  String?
+  author    String   @default("Admin")
+  readTime  String   @default("5 min read")
+  published Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categoryId String
+  category   BlogCategory @relation(fields: [categoryId], references: [id])
+  @@index([categoryId])
+}
+model PortfolioCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  items PortfolioItem[]
+}
+
+model PortfolioItem {
+  id          String   @id @default(uuid())
+  title       String
+  client      String
+  description String
+  imageUrl    String
+  createdAt   DateTime @default(now())
+  featured    Boolean  @default(false)
+  published   Boolean  @default(true)
+  categoryId String
+  category   PortfolioCategory @relation(fields: [categoryId], references: [id])
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String
+  icon        String
+  imageUrl    String?
+  features    Json
+  order       Int      @default(0)
+  published   Boolean  @default(true)
+  featured    Boolean  @default(false) 
+  createdAt  DateTime @default(now())
+}
+model Testimonial {
+  id        String   @id @default(uuid())
+  name      String
+  role      String
+  content   String
+  rating    Int      @default(5)
+  published Boolean  @default(true)
+  featured  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
+// ALTER TABLE "AdminUser"
+// ALTER COLUMN "id"
+// SET DEFAULT gen_random_uuid();
