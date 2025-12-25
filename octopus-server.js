@@ -29,6 +29,46 @@ const supabase = createClient(
 
 /* ---------- Multer ---------- */
 const upload = multer({ storage: multer.memoryStorage() });
+async function collectDbImages(prisma) {
+  const [services, portfolio, blogs] = await Promise.all([
+    prisma.service.findMany({ select: { imageUrl: true } }),
+    prisma.portfolioItem.findMany({ select: { imageUrl: true } }),
+    // prisma.testimonial.findMany({ select: { imageUrl: true } }),
+    prisma.blogPost.findMany({ select: { imageUrl: true } }),
+  ]);
+
+  return [...services, ...portfolio, ...blogs]
+    .map(i => i.imageUrl)
+    .filter(Boolean)
+    .map(url =>
+      url
+        .split("/storage/v1/object/public/")[1]
+        ?.replace(`${process.env.SUPABASE_BUCKET}/`, "")
+    )
+    .filter(Boolean);
+}
+
+async function listBucketFiles(supabase) {
+  const folders = ["services", "portfolio", "testimonials", "blog"];
+  let files = [];
+
+  for (const folder of folders) {
+    const { data, error } = await supabase
+      .storage
+      .from(process.env.SUPABASE_BUCKET)
+      .list(folder, { limit: 1000 });
+
+    if (error || !data) continue;
+
+    files.push(
+      ...data
+        .filter(f => f.name)
+        .map(f => `${folder}/${f.name}`)
+    );
+  }
+
+  return files;
+}
 
 /* ===============================
    AUTH ROUTES
@@ -389,12 +429,13 @@ app.get("/api/portfolio/featured", async (_req, res) => {
 
   res.json(items);
 });
-// app.get("/api/portfolio/categories", async (_req, res) => {
-//   const cats = await prisma.portfolioCategory.findMany({
-//     orderBy: { name: "asc" },
-//   });
-//   res.json(cats);
-// });
+app.delete("/api/admin/portfolio/:id", requireAdmin, async (req, res) => {
+  await prisma.portfolioItem.delete({
+    where: { id: req.params.id },
+  });
+
+  res.json({ success: true });
+});
 
 app.delete("/api/admin/portfolio/categories/:id", requireAdmin, async (req, res) => {
   const count = await prisma.portfolioItem.count({
@@ -564,6 +605,13 @@ app.get("/api/services/featured", async (_req, res) => {
 
   res.json(services);
 });
+app.delete("/api/admin/services/:id", requireAdmin, async (req, res) => {
+  await prisma.service.delete({
+    where: { id: req.params.id },
+  });
+
+  res.json({ success: true });
+});
 app.get("/api/testimonials/featured", async (_req, res) => {
   const testimonials = await prisma.testimonial.findMany({
     where: { published: true, featured: true },
@@ -639,6 +687,55 @@ app.delete("/api/admin/testimonials/:id", requireAdmin, async (req, res) => {
     where: { id: req.params.id },
   });
   res.json({ success: true });
+});
+
+app.get("/api/admin/storage/audit", requireAdmin, async (_req, res) => {
+  const dbFiles = await collectDbImages(prisma);
+  const storageFiles = await listBucketFiles(supabase);
+
+  const dbSet = new Set(dbFiles);
+
+  const linked = [];
+  const orphan = [];
+
+  for (const file of storageFiles) {
+    if (dbSet.has(file)) {
+      linked.push({ file, status: "linked" });
+    } else {
+      orphan.push({ file, status: "orphan" });
+    }
+  }
+
+  const missing = dbFiles
+    .filter(dbFile => !storageFiles.includes(dbFile))
+    .map(file => ({ file, status: "missing" }));
+
+  res.json({
+    summary: {
+      linked: linked.length,
+      orphan: orphan.length,
+      missing: missing.length,
+    },
+    linked,
+    orphan,
+    missing,
+  });
+});
+app.post("/api/admin/storage/delete", requireAdmin, async (req, res) => {
+  const { files } = req.body;
+
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: "No files provided" });
+  }
+
+  const { error } = await supabase
+    .storage
+    .from(process.env.SUPABASE_BUCKET)
+    .remove(files);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json({ success: true, deleted: files.length });
 });
 
 
