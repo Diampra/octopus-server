@@ -690,14 +690,21 @@ app.delete("/api/admin/testimonials/:id", requireAdmin, async (req, res) => {
 });
 
 app.get("/api/admin/storage/audit", requireAdmin, async (_req, res) => {
-  const dbFiles = await collectDbImages(prisma);
-  const storageFiles = await listBucketFiles(supabase);
+  // Parallel data fetching - major improvement
+  const [dbFiles, storageFiles] = await Promise.all([
+    collectDbImages(prisma),
+    listBucketFiles(supabase)
+  ]);
 
+  // Convert both to Sets for O(1) lookups
   const dbSet = new Set(dbFiles);
+  const storageSet = new Set(storageFiles);
 
   const linked = [];
   const orphan = [];
+  const missing = [];
 
+  // Single pass through storage files
   for (const file of storageFiles) {
     if (dbSet.has(file)) {
       linked.push({ file, status: "linked" });
@@ -706,9 +713,12 @@ app.get("/api/admin/storage/audit", requireAdmin, async (_req, res) => {
     }
   }
 
-  const missing = dbFiles
-    .filter(dbFile => !storageFiles.includes(dbFile))
-    .map(file => ({ file, status: "missing" }));
+  // Efficient missing file detection using Set
+  for (const file of dbFiles) {
+    if (!storageSet.has(file)) {
+      missing.push({ file, status: "missing" });
+    }
+  }
 
   res.json({
     summary: {
@@ -738,6 +748,54 @@ app.post("/api/admin/storage/delete", requireAdmin, async (req, res) => {
   res.json({ success: true, deleted: files.length });
 });
 
+// ADMIN DASHBOARD STATS
+app.get("/api/admin/dashboard", requireAdmin, async (_req, res) => {
+  const [
+    totalPosts,
+    publishedPosts,
+    totalCategories,
+    totalPortfolio,
+    publishedPortfolio,
+    totalServices,
+    publishedServices,
+    totalTestimonials,
+    publishedTestimonials,
+  ] = await Promise.all([
+    prisma.blogPost.count(),
+    prisma.blogPost.count({ where: { published: true } }),
+
+    prisma.blogCategory.count(),
+
+    prisma.portfolioItem.count(),
+    prisma.portfolioItem.count({ where: { published: true } }),
+
+    prisma.service.count(),
+    prisma.service.count({ where: { published: true } }),
+
+    prisma.testimonial.count(),
+    prisma.testimonial.count({ where: { published: true } }),
+  ]);
+
+  res.json({
+    posts: {
+      total: totalPosts,
+      published: publishedPosts,
+    },
+    categories: totalCategories,
+    portfolio: {
+      total: totalPortfolio,
+      published: publishedPortfolio,
+    },
+    services: {
+      total: totalServices,
+      published: publishedServices,
+    },
+    testimonials: {
+      total: totalTestimonials,
+      published: publishedTestimonials,
+    },
+  });
+});
 
 /* ===============================
    START SERVER
