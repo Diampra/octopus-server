@@ -89,6 +89,19 @@ model AdminUser {
   email     String   @unique
   createdAt DateTime @default(now())
 }
+model Media {
+  id        Int      @id @default(autoincrement())
+  filePath  String   @unique
+  posterPath String?
+  type      MediaType
+  folder    String
+  createdAt DateTime @default(now())
+}
+
+enum MediaType {
+  image
+  video
+}
 
 // ALTER TABLE "AdminUser"
 // ALTER COLUMN "id"

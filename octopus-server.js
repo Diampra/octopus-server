@@ -15,7 +15,9 @@ const { requireAdmin } = require("./middleware/requireAdmin");
 
 const app = express();
 const prisma = new PrismaClient();
-
+const { generateVideoPoster } = require("./utils/generateVideoPoster");
+const fs = require("fs");
+const os = require("os");
 /* ---------- Middleware ---------- */
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -49,7 +51,7 @@ async function collectDbImages(prisma) {
 }
 
 async function listBucketFiles(supabase) {
-  const folders = ["services", "portfolio", "testimonials", "blog"];
+  const folders = ["services", "portfolio", "testimonials", "blog", "misc"];
   let files = [];
 
   for (const folder of folders) {
@@ -795,6 +797,141 @@ app.get("/api/admin/dashboard", requireAdmin, async (_req, res) => {
       published: publishedTestimonials,
     },
   });
+});
+app.post(
+  "/api/admin/storage/upload",
+  requireAdmin,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const { folder = "misc" } = req.body;
+      const isVideo = req.file.mimetype.startsWith("video/");
+      const ext = path.extname(req.file.originalname);
+      const baseName = Date.now();
+
+      const filePath = `${folder}/${baseName}${ext}`;
+      let posterPath = null;
+
+      /* Upload original */
+      await supabase.storage
+        .from(process.env.SUPABASE_BUCKET)
+        .upload(filePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+        });
+
+      /* Generate poster if video */
+      if (isVideo) {
+        const tempVideo = path.join(os.tmpdir(), `${baseName}${ext}`);
+        fs.writeFileSync(tempVideo, req.file.buffer);
+
+        const generatedPoster = await generateVideoPoster(tempVideo);
+        posterPath = `${folder}/posters/${baseName}.jpg`;
+
+        const posterBuffer = fs.readFileSync(generatedPoster);
+
+        await supabase.storage
+          .from(process.env.SUPABASE_BUCKET)
+          .upload(posterPath, posterBuffer, {
+            contentType: "image/jpeg",
+            upsert: true,
+          });
+
+        fs.unlinkSync(tempVideo);
+        fs.unlinkSync(generatedPoster);
+      }
+
+      /* SAVE IN DB (THIS WAS NEVER RUNNING BEFORE) */
+      const media = await prisma.media.create({
+        data: {
+          filePath,
+          posterPath,
+          folder,
+          type: isVideo ? "video" : "image",
+        },
+      });
+
+      res.json(media);
+    } catch (err) {
+      console.error("UPLOAD FAILED:", err);
+      res.status(500).json({ error: "Upload failed" });
+    }
+  }
+);
+app.post("/api/admin/storage/delete", requireAdmin, async (req, res) => {
+  const { files } = req.body;
+
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: "No files provided" });
+  }
+
+  const mediaRecords = await prisma.media.findMany({
+    where: { filePath: { in: files } },
+  });
+
+  const pathsToDelete = new Set();
+
+  for (const file of files) {
+    pathsToDelete.add(file);
+
+    //  fallback poster inference (old uploads)
+    const posterGuess = file.replace(/\/([^/]+)\.\w+$/, "/posters/$1.jpg");
+    pathsToDelete.add(posterGuess);
+  }
+
+  for (const media of mediaRecords) {
+    if (media.posterPath) {
+      pathsToDelete.add(media.posterPath);
+    }
+  }
+
+  await supabase.storage
+    .from(process.env.SUPABASE_BUCKET)
+    .remove([...pathsToDelete]);
+
+  await prisma.media.deleteMany({
+    where: { filePath: { in: files } },
+  });
+
+  res.json({
+    success: true,
+    deleted: [...pathsToDelete],
+  });
+});
+app.post("/api/admin/storage/cleanup-posters", requireAdmin, async (_req, res) => {
+  const { data, error } = await supabase.storage
+    .from(process.env.SUPABASE_BUCKET)
+    .list("misc/posters", { limit: 1000 });
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const dbPosters = await prisma.media.findMany({
+    where: { posterPath: { not: null } },
+    select: { posterPath: true },
+  });
+
+  const dbSet = new Set(dbPosters.map(p => p.posterPath));
+
+  const orphanPosters = data
+    .map(f => `misc/posters/${f.name}`)
+    .filter(p => !dbSet.has(p));
+
+  if (orphanPosters.length > 0) {
+    await supabase.storage
+      .from(process.env.SUPABASE_BUCKET)
+      .remove(orphanPosters);
+  }
+
+  res.json({
+    deleted: orphanPosters.length,
+    files: orphanPosters,
+  });
+});
+
+app.get("/api/admin/media", requireAdmin, async (_req, res) => {
+  const media = await prisma.media.findMany({
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(media);
 });
 
 /* ===============================
