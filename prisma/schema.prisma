@@ -36,6 +36,8 @@ model BlogPost {
   categoryId String
   category   BlogCategory @relation(fields: [categoryId], references: [id])
   @@index([categoryId])
+  @@index([createdAt])
+  @@index([published, createdAt])
 }
 model PortfolioCategory {
   id        String   @id @default(uuid())
@@ -57,6 +59,8 @@ model PortfolioItem {
   published   Boolean  @default(true)
   categoryId String
   category   PortfolioCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([published, createdAt, id])
 }
 
 model Service {
@@ -71,6 +75,10 @@ model Service {
   published   Boolean  @default(true)
   featured    Boolean  @default(false) 
   createdAt  DateTime @default(now())
+
+  @@index([featured])
+  @@index([published, order])
+  
 }
 model Testimonial {
   id        String   @id @default(uuid())

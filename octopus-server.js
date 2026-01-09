@@ -326,23 +326,46 @@ app.get("/api/admin/blogs", requireAdmin, async (_req, res) => {
    PUBLIC BLOG ROUTES
 ================================ */
 
-app.get("/api/blogs", async (_req, res) => {
+app.get("/api/blogs", async (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+
+  const limit = Math.min(Number(req.query.limit) || 9, 50);
+  const cursor = req.query.cursor;
+
   const blogs = await prisma.blogPost.findMany({
     where: { published: true },
     orderBy: { createdAt: "desc" },
+    take: limit + 1, // fetch one extra
+    ...(cursor && {
+      cursor: { id: cursor },
+      skip: 1,
+    }),
     select: {
       id: true,
       title: true,
       slug: true,
       excerpt: true,
       imageUrl: true,
-      category: true,
       createdAt: true,
+      category: {
+        select: {
+          name: true,
+          slug: true,
+        },
+      },
     },
   });
 
-  res.json(blogs);
+  const hasMore = blogs.length > limit;
+  const items = hasMore ? blogs.slice(0, -1) : blogs;
+  const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+  res.json({
+    items,
+    nextCursor,
+  });
 });
+
 app.get("/api/blogs/:slug", async (req, res) => {
   const blog = await prisma.blogPost.findUnique({
     where: { slug: req.params.slug },
@@ -475,16 +498,41 @@ app.delete("/api/admin/portfolio/:id", requireAdmin, async (req, res) => {
   });
   res.json({ success: true });
 });
-app.get("/api/portfolio", async (_req, res) => {
+app.get("/api/portfolio", async (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+
+  const limit = Math.min(Number(req.query.limit) || 9, 50);
+  const cursor = req.query.cursor;
+
   const items = await prisma.portfolioItem.findMany({
-    include: {
-      category: true,
+    where: { published: true },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(cursor && {
+      cursor: { id: cursor },
+      skip: 1,
+    }),
+    select: {
+      id: true,
+      title: true,
+      client: true,
+      description: true,
+      imageUrl: true,
+      category: {
+        select: { name: true },
+      },
     },
-    orderBy: { createdAt: "desc" },
   });
 
-  res.json(items);
+  const hasMore = items.length > limit;
+  const data = hasMore ? items.slice(0, -1) : items;
+
+  res.json({
+    items: data,
+    nextCursor: hasMore ? data[data.length - 1].id : null,
+  });
 });
+
 app.get("/api/portfolio/categories", async (_req, res) => {
   
   const categories = await prisma.portfolioCategory.findMany({
@@ -509,13 +557,26 @@ app.get("/api/admin/portfolio/:id", requireAdmin, async (req, res) => {
   res.json(item);
 });
 app.get("/api/services", async (_req, res) => {
+  res.set("Cache-Control", "public, max-age=600");
+
   const services = await prisma.service.findMany({
     where: { published: true },
     orderBy: { order: "asc" },
+    take: 20,
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      description: true,
+      icon: true,
+      imageUrl: true,
+      features: true,
+    },
   });
 
   res.json(services);
 });
+
 app.post("/api/admin/services", requireAdmin, async (req, res) => {
   //find max order
   const last = await prisma.service.findFirst({
